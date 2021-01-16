@@ -8,15 +8,21 @@ import androidx.fragment.app.FragmentActivity;
 import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.AlertDialog;
+import android.app.PendingIntent;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
+import android.util.Log;
+import android.widget.Toast;
 
+import com.google.android.gms.location.Geofence;
 import com.google.android.gms.location.GeofencingClient;
+import com.google.android.gms.location.GeofencingRequest;
 import com.google.android.gms.location.LocationServices;
 import com.google.android.gms.maps.CameraUpdateFactory;
 import com.google.android.gms.maps.GoogleMap;
@@ -25,13 +31,19 @@ import com.google.android.gms.maps.SupportMapFragment;
 import com.google.android.gms.maps.model.CircleOptions;
 import com.google.android.gms.maps.model.LatLng;
 import com.google.android.gms.maps.model.MarkerOptions;
+import com.google.android.gms.tasks.OnFailureListener;
+import com.google.android.gms.tasks.OnSuccessListener;
 
 public class MapsActivity extends FragmentActivity implements OnMapReadyCallback, GoogleMap.OnMapLongClickListener {
 
     private static final int FINE_LOCATION_ACCESS_REQUEST_CODE = 1001;
+    private int BACKGROUND_LOCATION_ACCESS_REQUEST_CODE = 10002;
+    private String GEOFENCE_ID = "SOME_GEOFENCE_ID";
     private GoogleMap mMap;
     private GeofencingClient geofencingClient;
-    public static final float GEOFENCE_RADIUS = 200;
+    private GeofenceHelper geofenceHelper;
+    public float GEOFENCE_RADIUS = 200;
+    private final String TAG = "MapsActivity";
 
 
     @Override
@@ -44,6 +56,7 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
         mapFragment.getMapAsync(this);
 
         geofencingClient = LocationServices.getGeofencingClient(this);
+        geofenceHelper = new GeofenceHelper(this);
     }
 
     /**
@@ -59,8 +72,8 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
     public void onMapReady(GoogleMap googleMap) {
         mMap = googleMap;
 
-        // Add a marker in Sydney and move the camera
-        LatLng dhaka = new LatLng(23.7950, 90.3992);
+        // Add a marker in Sydney and move the camera 23.795158587414274, 90.39920794033618
+        LatLng dhaka = new LatLng(23.795158587414274, 90.39920794033618);
         // mMap.addMarker(new MarkerOptions().position(sydney).title("Marker in Sydney"));
         mMap.moveCamera(CameraUpdateFactory.newLatLngZoom(dhaka, 16));
 
@@ -119,15 +132,78 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
                 }
             }
         }
+
+        if (requestCode == BACKGROUND_LOCATION_ACCESS_REQUEST_CODE) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                //We have the permission
+                Toast.makeText(this, "You can add geofences...", Toast.LENGTH_SHORT).show();
+            } else {
+                //We do not have the permission..
+                Toast.makeText(this, "Background location access is necessary for geofences to trigger...", Toast.LENGTH_SHORT).show();
+            }
+        }
     }
 
 
     @Override
     public void onMapLongClick(LatLng latLng) {
+        if (Build.VERSION.SDK_INT >= 29) {
+            //We need background permission
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+                handleMapLongClick(latLng);
+            } else {
+                if (ActivityCompat.shouldShowRequestPermissionRationale(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION)) {
+                    //We show a dialog and ask for permission
+                    ActivityCompat.requestPermissions(this, new String[] {Manifest.permission.ACCESS_BACKGROUND_LOCATION}, BACKGROUND_LOCATION_ACCESS_REQUEST_CODE);
+                } else {
+                    ActivityCompat.requestPermissions(this, new String[] {Manifest.permission.ACCESS_BACKGROUND_LOCATION}, BACKGROUND_LOCATION_ACCESS_REQUEST_CODE);
+                }
+            }
+
+        } else {
+            handleMapLongClick(latLng);
+        }
+    }
+
+    private void handleMapLongClick(LatLng latLng) {
         mMap.clear();
         addMarker(latLng);
         addCircle(latLng, GEOFENCE_RADIUS);
+        addGeofence(latLng, GEOFENCE_RADIUS);
     }
+
+
+    @SuppressLint("MissingPermission")
+    private void addGeofence(LatLng latLng, float radius) {
+        Log.d(TAG, "addGeofence: started");
+
+        Geofence geofence = geofenceHelper.getGeofence(
+                GEOFENCE_ID,
+                latLng,
+                radius,
+                Geofence.GEOFENCE_TRANSITION_ENTER | Geofence.GEOFENCE_TRANSITION_DWELL | Geofence.GEOFENCE_TRANSITION_EXIT
+        );
+
+        GeofencingRequest geofencingRequest = geofenceHelper.getGeofencingRequest(geofence);
+
+        PendingIntent pendingIntent = geofenceHelper.getPendingIntent();
+        geofencingClient.addGeofences(geofencingRequest, pendingIntent)
+                .addOnSuccessListener(new OnSuccessListener<Void>() {
+                    @Override
+                    public void onSuccess(Void aVoid) {
+                        Log.d(TAG, "onSuccess: Geofence Added........");
+
+                    }
+                }).addOnFailureListener(new OnFailureListener() {
+            @Override
+            public void onFailure(@NonNull Exception e) {
+
+                String errorMessage = geofenceHelper.getErrorString(e);
+                Log.d(TAG, "Geofence onFailure: " + errorMessage);
+            }
+        });
+    }
+
 
     private void addMarker(LatLng latLng) {
         MarkerOptions markerOptions = new MarkerOptions().position(latLng);
